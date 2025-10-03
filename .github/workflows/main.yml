@@ -1,116 +1,37 @@
-name: Terraform Subscription Resource Deployment (OIDC)
+name: 'Terraform CI'
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
+  pull_request:
 
-permissions:
-  id-token: write
-  contents: read
-
-env:
-  TF_WORKING_DIR: './terraform'
-  TF_VERSION: 'latest'
-  
 jobs:
   terraform:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      # ----------------------------------------------------
-      # 1. CACHING TERRAFORM PLUGINS/PROVIDERS
-      # ----------------------------------------------------
-      - name: Cache Terraform
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.TF_WORKING_DIR }}/.terraform
-            ~/.terraform.d/plugin-cache
-          key: terraform-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            terraform-${{ runner.os }}-
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
 
-      # ----------------------------------------------------
-      # 2. AUTHENTICATE TO AZURE via OIDC 
-      # ----------------------------------------------------
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: 'd2c5b5b1-d8df-4dbd-ac14-d347e7ab31b0' 
-          
-      # ----------------------------------------------------
-      # 3. SETUP TERRAFORM
-      # ----------------------------------------------------
-      - name: Setup Terraform CLI
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
+    - name: Terraform Init
+      run: terraform init
 
-      # ----------------------------------------------------
-      # 4. TERRAFORM INIT
-      # ----------------------------------------------------
-      - name: Terraform Init
-        id: init
-        run: terraform init
-        working-directory: ${{ env.TF_WORKING_DIR }}
+    - name: Terraform Format Check
+      run: terraform fmt -check
 
-      # ----------------------------------------------------
-      # 5. TERRAFORM VALIDATE
-      # ----------------------------------------------------
-      - name: Terraform Validate
-        id: validate
-        run: terraform validate
-        working-directory: ${{ env.TF_WORKING_DIR }}
+    - name: Terraform Validate
+      run: terraform validate
 
-      # ----------------------------------------------------
-      # 6. TERRAFORM PLAN (detailed exit code)
-      # ----------------------------------------------------
-      - name: Terraform Plan
-        id: plan
-        run: |
-          terraform plan -detailed-exitcode -no-color > plan.txt
-          PLAN_EXIT_CODE=$?
-          echo "PLAN_EXIT_CODE=$PLAN_EXIT_CODE" >> $GITHUB_ENV
-          cat plan.txt
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        continue-on-error: true
+    - name: Terraform Plan
+      id: plan
+      run: |
+        terraform plan -out=tfplan.binary
+        echo "exitcode=$?" >> $GITHUB_OUTPUT
 
-      # ----------------------------------------------------
-      # 7. SHOW PLAN OUTPUT
-      # ----------------------------------------------------
-      - name: Show Plan Output
-        run: cat ${{ env.TF_WORKING_DIR }}/plan.txt
-
-      # ----------------------------------------------------
-      # 8. APPLY ONLY IF CHANGES
-      # ----------------------------------------------------
-      - name: Terraform Apply
-        if: env.PLAN_EXIT_CODE == '2' && github.ref == 'refs/heads/main'
-        run: terraform apply -auto-approve
-        working-directory: ${{ env.TF_WORKING_DIR }}
-
-      - name: No Changes to Apply
-        if: env.PLAN_EXIT_CODE == '0'
-        run: echo "No changes detected by terraform plan."
-
-      - name: Plan Failed
-        if: env.PLAN_EXIT_CODE == '1'
-        run: |
-          echo "Terraform plan failed. Please check the output above."
-          exit 1
-
-      # ----------------------------------------------------
-      # 9. CLEANUP
-      # ----------------------------------------------------
-      - name: Azure Logout
-        if: always()
-        run: az logout
+    - name: Terraform Apply
+      if: steps.plan.outputs.exitcode == '2'
+      run: terraform apply -auto-approve tfplan.binary

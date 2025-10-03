@@ -1,4 +1,4 @@
-variable "subscription_id" {
-  description = "The Azure subscription ID to deploy resources into"
+variable "billing_scope_id" {
+  description = "Billing scope ID for MCA or EA"
   type        = string
 }

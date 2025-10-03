@@ -5,4 +5,5 @@ storage_account_name   = "tfmstateprod"
 tags = {
   environment = "Production"
   project     = "IaC-Demo"
+  Costcenter  = "Damien123"
 }

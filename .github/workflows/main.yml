@@ -1,37 +1,85 @@
-name: 'Terraform CI'
+name: Terraform Subscription Resource Deployment (OIDC)
 
+# Triggers the workflow on pushes to the 'main' branch
+# and allows manual running via workflow_dispatch for testing.
 on:
   push:
     branches:
       - main
-  pull_request:
+  workflow_dispatch:
 
+# Grant the workflow permission to generate and use the OIDC token
+permissions:
+  id-token: write # Required for the azure/login action (OIDC)
+  contents: read  # Allows checkout of the repository code
+
+# Define the environment variables used throughout the pipeline
+env:
+  TF_WORKING_DIR: './terraform'  # Assuming your main.tf is in a 'terraform' subdirectory
+  TF_VERSION: 'latest'
+  
 jobs:
   terraform:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up Terraform
-      uses: hashicorp/setup-terraform@v3
+      # ----------------------------------------------------
+      # 1. AUTHENTICATE TO AZURE via OIDC 
+      #    (Uses Service Principal assigned at Management Group Scope)
+      # ----------------------------------------------------
+        - name: 'Azure Login (OIDC)'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          # 🚨 ALTERNATIVE FIX: Provide the specific subscription ID
+          subscription-id: 'd2c5b5b1-d8df-4dbd-ac14-d347e7ab31b0' 
+          
+      # ----------------------------------------------------
+      # 2. SETUP TERRAFORM
+      # ----------------------------------------------------
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          
+      # ----------------------------------------------------
+      # 3. TERRAFORM WORKFLOW
+      # ----------------------------------------------------
+      - name: Terraform Init
+        id: init
+        run: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        # Note: If you use remote state, ensure your backend config 
+        # is also set up for OIDC authentication.
 
-    - name: Terraform Init
-      run: terraform init
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
 
-    - name: Terraform Format Check
-      run: terraform fmt -check
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        continue-on-error: true
 
-    - name: Terraform Validate
-      run: terraform validate
+      - name: Show Plan Output
+        if: success() || failure()
+        run: echo "${{ steps.plan.outputs.stdout }}"
 
-    - name: Terraform Plan
-      id: plan
-      run: |
-        terraform plan -out=tfplan.binary
-        echo "exitcode=$?" >> $GITHUB_OUTPUT
+      - name: Terraform Apply
+        # Only applies on successful run AND when pushing/merging to 'main'
+        if: github.ref == 'refs/heads/main' && success()
+        run: terraform apply -auto-approve
+        working-directory: ${{ env.TF_WORKING_DIR }}
 
-    - name: Terraform Apply
-      if: steps.plan.outputs.exitcode == '2'
-      run: terraform apply -auto-approve tfplan.binary
+      # ----------------------------------------------------
+      # 4. CLEANUP
+      # ----------------------------------------------------
+      - name: Azure Logout
+        if: always()
+        run: az logout

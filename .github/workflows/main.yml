@@ -1,84 +1,115 @@
 name: Terraform Subscription Resource Deployment (OIDC)
 
-# Triggers the workflow on pushes to the 'main' branch
-# and allows manual running via workflow_dispatch for testing.
 on:
   push:
     branches:
       - main
   workflow_dispatch:
 
-# Grant the workflow permission to generate and use the OIDC token
 permissions:
-  id-token: write # Required for the azure/login action (OIDC)
-  contents: read  # Allows checkout of the repository code
+  id-token: write
+  contents: read
 
-# Define the environment variables used throughout the pipeline
 env:
-  TF_WORKING_DIR: './terraform'  # Assuming your main.tf is in a 'terraform' subdirectory
+  TF_WORKING_DIR: './terraform'
   TF_VERSION: 'latest'
   
 jobs:
   terraform:
     runs-on: ubuntu-latest
-    
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       # ----------------------------------------------------
-      # 1. AUTHENTICATE TO AZURE via OIDC 
-      #    (Uses Service Principal assigned at Management Group Scope)
+      # 1. CACHING TERRAFORM PLUGINS/PROVIDERS
       # ----------------------------------------------------
-      - name: 'Azure Login (OIDC)'
+      - name: Cache Terraform
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.TF_WORKING_DIR }}/.terraform
+            ~/.terraform.d/plugin-cache
+          key: terraform-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            terraform-${{ runner.os }}-
+
+      # ----------------------------------------------------
+      # 2. AUTHENTICATE TO AZURE via OIDC 
+      # ----------------------------------------------------
+      - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          # 🚨 ALTERNATIVE FIX: Provide the specific subscription ID
           subscription-id: 'd2c5b5b1-d8df-4dbd-ac14-d347e7ab31b0' 
           
       # ----------------------------------------------------
-      # 2. SETUP TERRAFORM
+      # 3. SETUP TERRAFORM
       # ----------------------------------------------------
       - name: Setup Terraform CLI
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-          
+
       # ----------------------------------------------------
-      # 3. TERRAFORM WORKFLOW
+      # 4. TERRAFORM INIT
       # ----------------------------------------------------
       - name: Terraform Init
         id: init
         run: terraform init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        # Note: If you use remote state, ensure your backend config 
-        # is also set up for OIDC authentication.
 
+      # ----------------------------------------------------
+      # 5. TERRAFORM VALIDATE
+      # ----------------------------------------------------
       - name: Terraform Validate
         id: validate
         run: terraform validate
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      # ----------------------------------------------------
+      # 6. TERRAFORM PLAN (detailed exit code)
+      # ----------------------------------------------------
       - name: Terraform Plan
         id: plan
-        run: terraform plan -no-color
+        run: |
+          terraform plan -detailed-exitcode -no-color > plan.txt
+          PLAN_EXIT_CODE=$?
+          echo "PLAN_EXIT_CODE=$PLAN_EXIT_CODE" >> $GITHUB_ENV
+          cat plan.txt
         working-directory: ${{ env.TF_WORKING_DIR }}
         continue-on-error: true
 
+      # ----------------------------------------------------
+      # 7. SHOW PLAN OUTPUT
+      # ----------------------------------------------------
       - name: Show Plan Output
-        if: success() || failure()
-        run: echo "${{ steps.plan.outputs.stdout }}"
+        run: cat ${{ env.TF_WORKING_DIR }}/plan.txt
 
+      # ----------------------------------------------------
+      # 8. APPLY ONLY IF CHANGES
+      # ----------------------------------------------------
       - name: Terraform Apply
-        # Only applies on successful run AND when pushing/merging to 'main'
-        if: github.ref == 'refs/heads/main' && success()
+        if: env.PLAN_EXIT_CODE == '2' && github.ref == 'refs/heads/main'
         run: terraform apply -auto-approve
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: No Changes to Apply
+        if: env.PLAN_EXIT_CODE == '0'
+        run: echo "No changes detected by terraform plan."
+
+      - name: Plan Failed
+        if: env.PLAN_EXIT_CODE == '1'
+        run: |
+          echo "Terraform plan failed. Please check the output above."
+          exit 1
+
       # ----------------------------------------------------
-      # 4. CLEANUP
+      # 9. CLEANUP
       # ----------------------------------------------------
       - name: Azure Logout
         if: always()

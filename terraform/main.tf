@@ -1,7 +1,7 @@
 # main.tf
 
 # ----------------------------------------------------
-# 1. CORE AZURE PROVIDER (Implicitly uses OIDC credentials from GitHub Actions)
+# 1. CORE AZURE PROVIDER (Implicitly uses OIDC credentials from GitHub Action)
 # ----------------------------------------------------
 terraform {
   required_providers {

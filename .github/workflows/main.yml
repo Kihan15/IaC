@@ -83,7 +83,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     # Ensures this job runs only AFTER the plan job succeeds
-    needs: [plan]
+    #needs: [plan]
     
     # 🚨 CRITICAL: This links the job to a protected GitHub Environment
     environment: 

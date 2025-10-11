@@ -1,31 +1,49 @@
-variable "target_subscription_id" {
-  description = "The Azure Subscription ID for resource deployment."
+variable "metadata" {
   type        = string
+  description = "description"
 }
 
-variable "resource_group_name" {
-  description = "Name of the resource group."
+variable "parameters" {
   type        = string
-  default     = "rg-prod-app"
+  description = "description"
 }
 
-variable "location" {
-  description = "Azure region for resource deployment."
+variable "policy_rule" {
   type        = string
-  default     = "East US"
+  description = "description"
+  default     = "type"
 }
 
-variable "storage_account_name" {
-  description = "Globally unique name for the storage account (lowercase)."
+variable "display_name" {
   type        = string
-  default     = "tfmgstorageacnt"
+  description = "description"
 }
 
-variable "tags" {
-  description = "Tags to assign to resources."
-  type        = map(string)
-  default     = {
-    environment = "Production"
-    project     = "OIDC-Demo"
-  }
+
+
+variable "policy_name" {
+  type        = string
+  description = "description"
 }
+
+variable "policy_mode" {
+  type        = string
+  description = "description"
+  default     = "Indexed"
+}
+/*
+
+mode - (Required) The policy mode that allows you to specify which resource types will be evaluated. 
+Possible values are 
+   All, 
+   Indexed, 
+   Microsoft.ContainerService.Data, 
+   Microsoft.CustomerLockbox.Data, 
+   Microsoft.DataCatalog.Data, 
+   Microsoft.KeyVault.Data, 
+   Microsoft.Kubernetes.Data, 
+   Microsoft.MachineLearningServices.Data, 
+   Microsoft.Network.Data
+   Microsoft.Synapse.Data
+
+*/

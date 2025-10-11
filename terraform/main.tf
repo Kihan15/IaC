@@ -12,17 +12,6 @@ terraform {
   }
 }
 
-###############################################################################
-# 2. CORE AZURE PROVIDER (OIDC from GitHub Actions)
-###############################################################################
-provider "azurerm" {
-  features {}
-  use_oidc = true
-}
-
-###############################################################################
-# 3. TARGET SUBSCRIPTION PROVIDER (ALIAS FOR SCOPED RESOURCES)
-###############################################################################
 provider "azurerm" {
   features        {}
   alias           = "target_sub"
@@ -30,40 +19,128 @@ provider "azurerm" {
   subscription_id = var.target_subscription_id
 }
 
-###############################################################################
-# 4. RESOURCE GROUP CREATION
-###############################################################################
-resource "azurerm_resource_group" "main" {
-  provider = azurerm.target_sub
-  name     = "${var.resource_group_name}-${substr(var.target_subscription_id, 0, 8)}"
-  location = var.location
-  tags     = var.tags
+# ------------------------------------------------------------
+# 1. Creation of Individual Policy Definitions
+# ------------------------------------------------------------
+
+# Find and read the file data into local Variables.
+locals {
+  policy_files = fileset("./policies/tag", "*.json")
+  raw_data     = [for f in local.policy_files : jsondecode(file("./policies/tag/${f}"))]
 }
 
-###############################################################################
-# 5. STORAGE ACCOUNT CREATION
-###############################################################################
-resource "azurerm_storage_account" "main" {
-  provider                  = azurerm.target_sub
-  name                      = "${var.storage_account_name}${substr(var.target_subscription_id, 0, 8)}"
-  resource_group_name       = azurerm_resource_group.main.name
-  location                  = azurerm_resource_group.main.location
-  account_tier              = "Standard"
-  account_replication_type  = "LRS"
-  min_tls_version           = "TLS1_2"
+/*
+ 'for' expression is used to convert the Tuple (from local.json_data), to an Object type.
+ In depth explanation of 'for' expression can be found in the Readme
+*/
 
-  tags = merge(var.tags, { resource = "storage-account" })
+
+module "custom_policy" {
+  for_each = { for f in local.raw_data : f.name => f }
+  source   = "./modules/policy_definition"
+
+  policy_name  = each.key
+  policy_mode  = each.value.properties.mode
+  display_name = each.value.properties.displayName
+  metadata     = jsonencode("${each.value.properties.metadata}")   #format("<<METADATA \n %s \n METADATA", each.value.properties.metadata)
+  parameters   = jsonencode("${each.value.properties.parameters}") #format("<<PARAMETERS \n %s \n PARAMETERS", each.value.properties.parameters)
+  policy_rule  = jsonencode("${each.value.properties.policyRule}") #format("<<POLICYRULE \n %s \n POLICYRULE", each.value.properties.policyRule)
+  #management_group = var.management_group --- IGNORE ---}
 }
 
-###############################################################################
-# 6. OUTPUTS
-###############################################################################
-output "storage_account_blob_endpoint" {
-  description = "The primary blob endpoint of the created Storage Account."
-  value       = azurerm_storage_account.main.primary_blob_endpoint
+
+
+# ------------------------------------------------------------
+# 2. Creation of initiative from Definitions
+# ------------------------------------------------------------
+
+resource "azurerm_policy_set_definition" "initiative_mandatory_tags" {
+  name         = "initiative-mandatory-tags-subs-rgs"
+  display_name = "Mandatory Tags (Subscriptions & Resource Groups)"
+  policy_type  = "Custom"
+  description  = "Requires presence of governance tags on subscriptions and resource groups."
+  metadata     = jsonencode({ category = "Tags" })
+
+  parameters = jsonencode({
+    effect = {
+      type          = "String"
+      metadata      = { displayName = "Effect for all included policies" }
+      allowedValues = ["Audit", "Deny", "Disabled"]
+      defaultValue  = "Audit"
+    }
+  })
+
+  ######################################################
+  # References (all inherit initiative-level effect)   #
+  ######################################################
+
+  policy_definition_reference {
+    reference_id         = "BusinessOwnerRequired"
+    policy_definition_id = module.custom_policy["tag-businessowner-required"].policy_definition_id
+    #parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
+
+  policy_definition_reference {
+    reference_id         = "EnvironmentRequiredAllowed"
+    policy_definition_id = module.custom_policy["tag-environment-required-and-allowed-subs-rgs"].policy_definition_id
+    #parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
+
+  policy_definition_reference {
+    reference_id         = "CompanyCodeRequired"
+    policy_definition_id = module.custom_policy["tag-companycode-required"].policy_definition_id
+    #parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
+  policy_definition_reference {
+    reference_id         = "ScmRequired"
+    policy_definition_id = module.custom_policy["tag-scm-required"].policy_definition_id
+    #parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
+
+  policy_definition_reference {
+    reference_id         = "DataClassificationRequiredAllowed"
+    policy_definition_id = module.custom_policy["tag-dataclassification-required-and-allowed-subs-rgs"].policy_definition_id
+    #parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
+
+  policy_definition_reference {
+    reference_id         = "BusinessCriticalityRequiredAllowed"
+    policy_definition_id = module.custom_policy["tag-businesscriticality-required-and-allowed-subs-rgs"].policy_definition_id
+    #parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
+
+  policy_definition_reference {
+    reference_id         = "CostCenterRequired"
+    policy_definition_id = module.custom_policy["tag-costcenter-required"].policy_definition_id
+    parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
+  policy_definition_reference {
+    reference_id         = "ProjectRequired"
+    policy_definition_id = module.custom_policy["tag-project-required"].policy_definition_id
+    #parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
+  policy_definition_reference {
+    reference_id         = "BusinessRequestRequired"
+    policy_definition_id = module.custom_policy["tag-businessrequest-required"].policy_definition_id
+    #parameter_values     = jsonencode({ effect = { value = "[parameters('effect')]" } })
+  }
 }
 
-output "resource_group_name" {
-  description = "The name of the created resource group."
-  value       = azurerm_resource_group.main.name
+
+
+
+############################################################
+# Assignment of Initiative tags to Subscription & resource groups)
+############################################################
+resource "azurerm_subscription_policy_assignment" "initiative_mandatory_tags_assignment" {
+  name                 = "assignment-initiative-mandatory-tags-subs-rgs"
+  display_name         = "Assignment: Mandatory Tags for Subscriptions & RGs"
+  description          = "Audits subscriptions and resource groups to ensure mandatory tags exist."
+  policy_definition_id = azurerm_policy_set_definition.initiative_mandatory_tags.id
+  subscription_id      = "/subscriptions/${var.subscription_id}"
+  enforce              = true
+
+  # parameters = jsonencode({
+  #   effect = { value = "Audit" }
+  # })
 }

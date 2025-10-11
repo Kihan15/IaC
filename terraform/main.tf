@@ -1,3 +1,4 @@
+
 ###############################################################################
 # 1. TERRAFORM BLOCK & AZURE PROVIDER CONFIGURATION
 ###############################################################################
@@ -71,7 +72,7 @@ resource "azurerm_policy_set_definition" "initiative_mandatory_tags" {
   })
 
   ######################################################
-  # References (all inherit initiative-level effect)   #
+  # References (all inherit initiative-level effect)   #
   ######################################################
 
   policy_definition_reference {
